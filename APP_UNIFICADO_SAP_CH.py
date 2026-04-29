@@ -152,13 +152,13 @@ class SAPAutomationGUI:
         self.load_icon()
         self.create_widgets()
         
-        # Tags de Cor Log
-        self.log_area.tag_configure("RESET", foreground="#D0D0D0")
-        self.log_area.tag_configure("VERDE", foreground="#66bb6a", font=('Consolas', 10, 'bold'))
-        self.log_area.tag_configure("AMARELO", foreground="#ffa726")
-        self.log_area.tag_configure("VERMELHO", foreground="#ef5350", font=('Consolas', 10, 'bold'))
-        self.log_area.tag_configure("AZUL", foreground="#42a5f5", font=('Consolas', 10, 'bold'))
-        self.log_area.tag_configure("CIANO", foreground="#26c6da")
+        # Tags de Cor Log (FONTE REDUZIDA PARA MELHOR VISUALIZAÇÃO)
+        self.log_area.tag_configure("RESET", foreground="#D0D0D0", font=('Consolas', 8))
+        self.log_area.tag_configure("VERDE", foreground="#66bb6a", font=('Consolas', 8, 'bold'))
+        self.log_area.tag_configure("AMARELO", foreground="#ffa726", font=('Consolas', 8, 'bold'))
+        self.log_area.tag_configure("VERMELHO", foreground="#ef5350", font=('Consolas', 8, 'bold'))
+        self.log_area.tag_configure("AZUL", foreground="#42a5f5", font=('Consolas', 8, 'bold'))
+        self.log_area.tag_configure("CIANO", foreground="#26c6da", font=('Consolas', 8, 'bold'))
         
     def create_icon_from_base64(self, base64_string):
         try:
@@ -237,8 +237,9 @@ class SAPAutomationGUI:
         log_frame = ttk.LabelFrame(self.main_tab, text="Log de Execução", style='TLabelframe')
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
-        self.log_area = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, font=("Consolas", 10), bg="#252526", fg="#D4D4D4", relief=tk.FLAT, borderwidth=0, insertbackground="white")
-        self.log_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # FONTE REDUZIDA AQUI TAMBÉM (size 8)
+        self.log_area = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, font=("Consolas", 8), bg="#252526", fg="#D4D4D4", relief=tk.FLAT, borderwidth=0, insertbackground="white")
+        self.log_area.pack(fill=tk.BOTH, expand=True, padx=2, pady=2) # Reduzi o padding interno também
 
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self.main_tab, variable=self.progress_var, maximum=100)
