@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Automação Integrada — SAP & Cargo Heroes
-Criação massiva de Requisições de Compra (ME51N) e atualização no Cargo Heroes.
+Criação massiva de Requisições de Compra (ME51N) e atualização no Cargo Heroes via API.
 
-Refatoração Profissional UI (CustomTkinter) + Correções de Segurança/Threading
+Refatoração Profissional UI (CustomTkinter LATAM Theme) + Correções de Segurança/Threading + API Bypass
 """
 
 import pandas as pd
@@ -30,20 +30,16 @@ from logging.handlers import RotatingFileHandler
 import ssl
 import certifi
 from typing import Optional, Any
+import json
 
 # --- Imports Selenium ---
 from oauth2client.service_account import ServiceAccountCredentials
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import (
-    WebDriverException,
-    NoSuchWindowException,
-    TimeoutException,
-)
+from selenium.webdriver.common.keys import Keys
 
 # --- Imports Keyring (armazenamento seguro de senhas) ---
 try:
@@ -54,7 +50,7 @@ except ImportError:
 
 # --- Retry para chamadas de API ---
 try:
-    from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+    from tenacity import retry, wait_exponential, stop_after_attempt
     TENACITY_DISPONIVEL = True
 except ImportError:
     TENACITY_DISPONIVEL = False
@@ -66,8 +62,8 @@ KEYRING_SERVICE_CH = "cargo_heroes_automation"
 # Configuração SSL segura
 ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
-# Configuração CustomTkinter
-ctk.set_appearance_mode("Dark")
+# Configuração CustomTkinter (Modo Claro/Light para fundo branco)
+ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 
@@ -122,9 +118,17 @@ class SAPAutomationGUI:
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
         self.root.title("Automação Integrada - SAP & Cargo Heroes")
-        self.root.geometry("1000x700")
-        self.root.minsize(900, 600)
+        
+        # JANELA MAIS COMPACTA (650x450)
+        self.root.geometry("650x450")
+        self.root.minsize(650, 450)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Paleta de Cores LATAM Airlines
+        self.COR_AZUL_LATAM = "#2A0087"
+        self.COR_VERMELHO_LATAM = "#EE1750"
+        self.COR_AZUL_HOVER = "#1A0050"
+        self.COR_VERMELHO_HOVER = "#B3103A"
 
         self._session_lock = threading.Lock()
         self._session: Optional[Any] = None
@@ -148,18 +152,6 @@ class SAPAutomationGUI:
             self.create_default_config()
 
         self.load_icon()
-
-        icon_start_b64 = self.fix_base64_padding("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAACXBIWXMAAAsTAAALEwEAmpwYAAABWWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNS40LjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyI+CiAgICAgICAgIDx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgpMTE82AAAByklEQVQ4EaVTTUhUURQ+V3d1JzUzDBf9B0sLw0lDItocoQd9QUG3LhpEL7pw7aJdKyIi6FYQ2oZ1UXQRhFAb60PQg1ZCi2kStZpoGjcz9768eW/G6Mwbw72X+37n3HPvPQCB8Q+QnL8xQCeAF/D/o/kOWG01P4BHgCfz30KMR8s+AaYAPND9GkAy8BpwGSgLHsA74JESi2kUeC2APdC6BN8B+u0mYwTo/2QjE58D2pXfAYwA215W25gBFoD1/R9IZzGgYv03gC2gC1gDvgIHADgACsAecD6hL8eA/4A/AT8BfwL6n2WnAY+A+cBj4DHvEY+BTYBT4B/gY+An4G9gOvgZfAReA/4FvgK/AqcB14DwwB+H/t9w9OAD+An/d8D/4L/EXkX2gN8A1XkLwNngGfA58Ar4DNwFvgE/A28Bv4Cfi/sXv0C/A78DPgIeBR4DvgE+A54AvAE+A9YAhYABYAzYC/gH2APWApWAcvAdqAfeAesAyuBvA74Anjkl+sN4EPgG+A3wBvgS5Y4ADwGjgIfAm8BD4GngCPANeA0cAW4BnwG3AcuArdBB/gMvAasA/8CPga+Ad8AvwB+A/YD/gD+AfwB+D/AP8C/gb8F/gX+A/wH/A78CvwNfA1sApsBGgHNgNngCXgGfAYeBIMAP+A18B6sAmsA58AW8AC8A2YAxaBLWAb2A3uAx8AZ4BnwEvAm8BTYB/4BOwBDoCTQBDwBrgD3AE+Ax4AZoCNb+V2d+AocB14B/gJ+BG4C1wBfgE+A74DPgX+D/gb+B/wL/A/4DvgF+BGYAhZ/f+AasAm8BWwA8+B14BTwGnAEOAX8B7wG3gV8H4L/f7bB/yXgG/A18CXwDvgQ2AH+AF8CJ4DngHPAK8Ar4PXgGfA78DPwN/Ad8A3wL+Bn5B/gP8F/rX7F/gV+B/wI/AJ8K/AnwA/8AMxS88wI6H8lAAAAAElFTSuQmCC")
-        icon_stop_b64 = self.fix_base64_padding("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAA7SURBVDhPY/wPBAxUACZA1gBTgA2K/1EGBgaG/2A8HIBoMRhIMeAgYADEDwFGBgYGDjA50uAzAAgwAK0/AwMT5urRAAAAAElFTSuQmCC")
-
-        try:
-            self.icons = {
-                "start": ctk.CTkImage(light_image=Image.open(io.BytesIO(base64.b64decode(icon_start_b64))), size=(16, 16)),
-                "stop": ctk.CTkImage(light_image=Image.open(io.BytesIO(base64.b64decode(icon_stop_b64))), size=(16, 16))
-            }
-        except Exception:
-            self.icons = {"start": None, "stop": None}
-
         self.create_widgets()
         self._configure_log_tags()
 
@@ -203,10 +195,18 @@ class SAPAutomationGUI:
             return sys._MEIPASS
         return os.path.dirname(os.path.abspath(__file__))
 
-    def is_executable(self) -> bool:
-        return getattr(sys, 'frozen', False)
-
     def load_icon(self) -> None:
+        icon_start_b64 = self.fix_base64_padding("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAACXBIWXMAAAsTAAALEwEAmpwYAAABWWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNS40LjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyI+CiAgICAgICAgIDx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgpMTE82AAAByklEQVQ4EaVTTUhUURQ+V3d1JzUzDBf9B0sLw0lDItocoQd9QUG3LhpEL7pw7aJdKyIi6FYQ2oZ1UXQRhFAb60PQg1ZCi2kStZpoGjcz9768eW/G6Mwbw72X+37n3HPvPQCB8Q+QnL8xQCeAF/D/o/kOWG01P4BHgCfz30KMR8s+AaYAPND9GkAy8BpwGSgLHsA74JESi2kUeC2APdC6BN8B+u0mYwTo/2QjE58D2pXfAYwA215W25gBFoD1/R9IZzGgYv03gC2gC1gDvgIHADgACsAecD6hL8eA/4A/AT8BfwL6n2WnAY+A+cBj4DHvEY+BTYBT4B/gY+An4G9gOvgZfAReA/4FvgK/AqcB14DwwB+H/t9w9OAD+An/d8D/4L/EXkX2gN8A1XkLwNngGfA58Ar4DNwFvgE/A28Bv4Cfi/sXv0C/A78DPgIeBR4DvgE+A54AvAE+A9YAhYABYAzYC/gH2APWApWAcvAdqAfeAesAyuBvA74Anjkl+sN4EPgG+A3wBvgS5Y4ADwGjgIfAm8BD4GngCPANeA0cAW4BnwG3AcuArdBB/gMvAasA/8CPga+Ad8AvwB+A/YD/gD+AfwB+D/AP8C/gb8F/gX+A/wH/A78CvwNfA1sApsBGgHNgNngCXgGfAYeBIMAP+A18B6sAmsA58AW8AC8A2YAxaBLWAb2A3uAx8AZ4BnwEvAm8BTYB/4BOwBDoCTQBDwBrgD3AE+Ax4AZoCNb+V2d+AocB14B/gJ+BG4C1wBfgE+A74DPgX+D/gb+B/wL/A/4DvgF+BGYAhZ/f+AasAm8BWwA8+B14BTwGnAEOAX8B7wG3gV8H4L/f7bB/yXgG/A18CXwDvgQ2AH+AF8CJ4DngHPAK8Ar4PXgGfA78DPwN/Ad8A3wL+Bn5B/gP8F/rX7F/gV+B/wI/AJ8K/AnwA/8AMxS88wI6H8lAAAAAElFTSuQmCC")
+        icon_stop_b64 = self.fix_base64_padding("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAA7SURBVDhPY/wPBAxUACZA1gBTgA2K/1EGBgaG/2A8HIBoMRhIMeAgYADEDwFGBgYGDjA50uAzAAgwAK0/AwMT5urRAAAAAElFTSuQmCC")
+
+        try:
+            self.icons = {
+                "start": ctk.CTkImage(light_image=Image.open(io.BytesIO(base64.b64decode(icon_start_b64))), size=(16, 16)),
+                "stop": ctk.CTkImage(light_image=Image.open(io.BytesIO(base64.b64decode(icon_stop_b64))), size=(16, 16))
+            }
+        except Exception:
+            self.icons = {"start": None, "stop": None}
+
         try:
             icon_path = os.path.join(self.resource_path, 'icone.ico')
             if not os.path.exists(icon_path):
@@ -243,135 +243,133 @@ class SAPAutomationGUI:
         return False
 
     def create_widgets(self) -> None:
-        self.header_label = ctk.CTkLabel(self.root, text="Automação Integrada - SAP & Cargo Heroes", font=ctk.CTkFont(size=24, weight="bold"))
-        self.header_label.pack(pady=(20, 0))
+        # Título menor e com menos margem
+        self.header_label = ctk.CTkLabel(self.root, text="Automação Integrada - SAP & Cargo Heroes", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.COR_AZUL_LATAM)
+        self.header_label.pack(pady=(10, 5))
 
-        self.tabview = ctk.CTkTabview(self.root, width=950, height=550)
-        self.tabview.pack(padx=20, pady=10, fill="both", expand=True)
+        self.tabview = ctk.CTkTabview(self.root, width=620, height=330,
+                                      segmented_button_selected_color=self.COR_AZUL_LATAM,
+                                      segmented_button_selected_hover_color=self.COR_AZUL_HOVER)
+        self.tabview.pack(padx=15, pady=0, fill="both", expand=True)
         self.tabview.add("Automação")
         self.tabview.add("Configurações")
 
         self.setup_main_tab(self.tabview.tab("Automação"))
         self.setup_config_tab(self.tabview.tab("Configurações"))
 
-        self.status_frame = ctk.CTkFrame(self.root, height=35, corner_radius=0, fg_color="transparent")
-        self.status_frame.pack(side="bottom", fill="x", padx=20, pady=(0, 10))
+        self.status_frame = ctk.CTkFrame(self.root, height=25, corner_radius=0, fg_color="transparent")
+        self.status_frame.pack(side="bottom", fill="x", padx=15, pady=(0, 5))
 
         self.sap_status_var = tk.StringVar(value="SAP: Desconectado")
-        self.sap_status_label = ctk.CTkLabel(self.status_frame, textvariable=self.sap_status_var, text_color="#ef5350", font=ctk.CTkFont(weight="bold"))
+        self.sap_status_label = ctk.CTkLabel(self.status_frame, textvariable=self.sap_status_var, text_color=self.COR_VERMELHO_LATAM, font=ctk.CTkFont(weight="bold", size=11))
         self.sap_status_label.pack(side="left")
 
         self.status_var = tk.StringVar(value="Pronto")
-        self.status_label = ctk.CTkLabel(self.status_frame, textvariable=self.status_var, text_color="gray")
+        self.status_label = ctk.CTkLabel(self.status_frame, textvariable=self.status_var, text_color="#666666", font=ctk.CTkFont(size=11))
         self.status_label.pack(side="right")
 
     def setup_main_tab(self, parent: ctk.CTkFrame) -> None:
         control_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        control_frame.pack(pady=(10, 15))
+        control_frame.pack(pady=(5, 10))
 
+        # Botões reduzidos para height=32
         self.start_button = ctk.CTkButton(
             control_frame, text="Iniciar SAP", image=self.icons["start"],
-            fg_color="#4CAF50", hover_color="#45a049",
-            command=self.start_automation, width=180, height=45, font=ctk.CTkFont(size=14, weight="bold")
+            fg_color=self.COR_AZUL_LATAM, hover_color=self.COR_AZUL_HOVER,
+            command=self.start_automation, width=140, height=32, font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.start_button.pack(side="left", padx=15)
+        self.start_button.pack(side="left", padx=8)
 
         self.ch_button = ctk.CTkButton(
             control_frame, text="Atualizar CH", image=self.icons["start"],
-            fg_color="#2196F3", hover_color="#1E88E5",
-            command=self.start_ch_automation, width=180, height=45, font=ctk.CTkFont(size=14, weight="bold")
+            fg_color=self.COR_AZUL_LATAM, hover_color=self.COR_AZUL_HOVER,
+            command=self.start_ch_automation, width=140, height=32, font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.ch_button.pack(side="left", padx=15)
+        self.ch_button.pack(side="left", padx=8)
 
         self.stop_button = ctk.CTkButton(
             control_frame, text="Parar Automação", image=self.icons["stop"],
-            fg_color="#f44336", hover_color="#d32f2f", state="disabled",
-            command=self.stop_automation, width=180, height=45, font=ctk.CTkFont(size=14, weight="bold")
+            fg_color=self.COR_VERMELHO_LATAM, hover_color=self.COR_VERMELHO_HOVER, state="disabled",
+            command=self.stop_automation, width=140, height=32, font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.stop_button.pack(side="left", padx=15)
+        self.stop_button.pack(side="left", padx=8)
 
         self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ctk.CTkProgressBar(parent, variable=self.progress_var)
-        self.progress_bar.pack(fill="x", padx=15, pady=(0, 10))
+        self.progress_bar = ctk.CTkProgressBar(parent, variable=self.progress_var, progress_color=self.COR_AZUL_LATAM, height=8)
+        self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
 
-        log_label = ctk.CTkLabel(parent, text="Log de Execução", font=ctk.CTkFont(weight="bold"))
-        log_label.pack(anchor="w", padx=15)
-
-        self.log_area = ctk.CTkTextbox(parent, font=ctk.CTkFont(family="Consolas", size=12), fg_color="#1e1e1e", text_color="#d4d4d4")
-        self.log_area.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        self.log_area = ctk.CTkTextbox(parent, font=ctk.CTkFont(family="Consolas", size=11), 
+                                       fg_color="#F2F2F2", text_color="#333333", 
+                                       border_width=1, border_color="#DDDDDD")
+        self.log_area.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_area.configure(state="disabled")
 
     def _configure_log_tags(self):
-        self.log_area.tag_config("RESET", foreground="#D0D0D0")
-        self.log_area.tag_config("VERDE", foreground="#66bb6a")
-        self.log_area.tag_config("AMARELO", foreground="#ffa726")
-        self.log_area.tag_config("VERMELHO", foreground="#ef5350")
-        self.log_area.tag_config("AZUL", foreground="#42a5f5")
-        self.log_area.tag_config("CIANO", foreground="#26c6da")
+        self.log_area.tag_config("RESET", foreground="#333333")
+        self.log_area.tag_config("VERDE", foreground="#008000")
+        self.log_area.tag_config("AMARELO", foreground="#CC7700")
+        self.log_area.tag_config("VERMELHO", foreground=self.COR_VERMELHO_LATAM)
+        self.log_area.tag_config("AZUL", foreground=self.COR_AZUL_LATAM)
+        self.log_area.tag_config("CIANO", foreground="#00838F")
 
     def setup_config_tab(self, parent: ctk.CTkFrame) -> None:
         scroll_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         scroll_frame.pack(fill="both", expand=True)
 
-        # SAP
-        sap_frame = ctk.CTkFrame(scroll_frame)
-        sap_frame.pack(fill="x", pady=10, padx=10)
-        ctk.CTkLabel(sap_frame, text="Credenciais SAP", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", padx=10, pady=(10, 5))
+        # Margens (pady) reduzidas drasticamente
+        sap_frame = ctk.CTkFrame(scroll_frame, fg_color="#F9F9F9", border_color="#DDDDDD", border_width=1)
+        sap_frame.pack(fill="x", pady=4, padx=5)
+        ctk.CTkLabel(sap_frame, text="Credenciais SAP", font=ctk.CTkFont(weight="bold", size=13), text_color=self.COR_AZUL_LATAM).pack(anchor="w", padx=10, pady=(5, 0))
 
         self.sap_path_var = tk.StringVar(value=self.config.get('SAP', 'caminho_logon', fallback=''))
         self.create_config_row(sap_frame, "Caminho Logon.exe:", self.sap_path_var, show_browse=True)
-
         self.sap_system_var = tk.StringVar(value=self.config.get('SAP', 'sistema', fallback=''))
-        self.create_config_row(sap_frame, "Sistema / Conexão:", self.sap_system_var)
-
+        self.create_config_row(sap_frame, "Sistema:", self.sap_system_var)
         self.sap_user_var = tk.StringVar(value=self.config.get('SAP', 'usuario', fallback=''))
         self.create_config_row(sap_frame, "Usuário:", self.sap_user_var)
-
         self.sap_password_var = tk.StringVar(value=self._obter_senha(KEYRING_SERVICE_SAP, 'senha', 'SAP', 'senha'))
         self.create_config_row(sap_frame, "Senha:", self.sap_password_var, is_password=True)
 
-        # GOOGLE
-        google_frame = ctk.CTkFrame(scroll_frame)
-        google_frame.pack(fill="x", pady=10, padx=10)
-        ctk.CTkLabel(google_frame, text="Configurações Google Sheets", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", padx=10, pady=(10, 5))
+        google_frame = ctk.CTkFrame(scroll_frame, fg_color="#F9F9F9", border_color="#DDDDDD", border_width=1)
+        google_frame.pack(fill="x", pady=4, padx=5)
+        ctk.CTkLabel(google_frame, text="Google Sheets", font=ctk.CTkFont(weight="bold", size=13), text_color=self.COR_AZUL_LATAM).pack(anchor="w", padx=10, pady=(5, 0))
 
         self.google_creds_var = tk.StringVar(value=self.config.get('GOOGLE', 'credenciais', fallback=''))
-        self.create_config_row(google_frame, "JSON Credenciais:", self.google_creds_var, show_browse=True)
-
+        self.create_config_row(google_frame, "Credenciais:", self.google_creds_var, show_browse=True)
         self.google_sheet_var = tk.StringVar(value=self.config.get('GOOGLE', 'planilha', fallback=''))
-        self.create_config_row(google_frame, "Nome da Planilha:", self.google_sheet_var)
-
+        self.create_config_row(google_frame, "Planilha:", self.google_sheet_var)
         self.google_tab_var = tk.StringVar(value=self.config.get('GOOGLE', 'aba', fallback=''))
-        self.create_config_row(google_frame, "Nome da Aba Principal:", self.google_tab_var)
+        self.create_config_row(google_frame, "Aba:", self.google_tab_var)
 
-        # CARGO HEROES
-        ch_frame = ctk.CTkFrame(scroll_frame)
-        ch_frame.pack(fill="x", pady=10, padx=10)
-        ctk.CTkLabel(ch_frame, text="Credenciais Cargo Heroes", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", padx=10, pady=(10, 5))
+        ch_frame = ctk.CTkFrame(scroll_frame, fg_color="#F9F9F9", border_color="#DDDDDD", border_width=1)
+        ch_frame.pack(fill="x", pady=4, padx=5)
+        ctk.CTkLabel(ch_frame, text="Cargo Heroes", font=ctk.CTkFont(weight="bold", size=13), text_color=self.COR_AZUL_LATAM).pack(anchor="w", padx=10, pady=(5, 0))
 
         self.ch_email_var = tk.StringVar(value=self.config.get('CARGO_HEROES', 'email', fallback=''))
         self.create_config_row(ch_frame, "Email:", self.ch_email_var)
-
         self.ch_pass_var = tk.StringVar(value=self._obter_senha(KEYRING_SERVICE_CH, 'senha', 'CARGO_HEROES', 'senha'))
         self.create_config_row(ch_frame, "Senha:", self.ch_pass_var, is_password=True)
 
-        # Botão Salvar
-        ctk.CTkButton(scroll_frame, text="Salvar Configurações", command=self.save_config, width=250, height=40, font=ctk.CTkFont(weight="bold")).pack(pady=20)
+        ctk.CTkButton(scroll_frame, text="Salvar Configurações", command=self.save_config, 
+                      width=200, height=32, font=ctk.CTkFont(weight="bold", size=12), 
+                      fg_color=self.COR_AZUL_LATAM, hover_color=self.COR_AZUL_HOVER).pack(pady=15)
 
     def create_config_row(self, parent, label_text, variable, is_password=False, show_browse=False):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", padx=10, pady=5)
+        frame.pack(fill="x", padx=10, pady=2) # Pady bem reduzido
         
-        lbl = ctk.CTkLabel(frame, text=label_text, width=150, anchor="e", font=ctk.CTkFont(size=13))
-        lbl.pack(side="left", padx=(0, 10))
+        lbl = ctk.CTkLabel(frame, text=label_text, width=110, anchor="e", font=ctk.CTkFont(size=11), text_color="#333333")
+        lbl.pack(side="left", padx=(0, 5))
         
         show_char = "*" if is_password else ""
-        entry = ctk.CTkEntry(frame, textvariable=variable, show=show_char, height=35)
+        # Altura do input reduzida para 28
+        entry = ctk.CTkEntry(frame, textvariable=variable, show=show_char, height=28, fg_color="white", text_color="black", border_color="#CCCCCC", font=ctk.CTkFont(size=11))
         entry.pack(side="left", fill="x", expand=True)
         
         if show_browse:
-            btn = ctk.CTkButton(frame, text="Selecionar", width=80, height=35, command=lambda: self.browse_file(variable))
-            btn.pack(side="left", padx=(10, 0))
+            # Altura do botão selecionar reduzida para 28
+            btn = ctk.CTkButton(frame, text="Selecionar", width=70, height=28, command=lambda: self.browse_file(variable), fg_color=self.COR_AZUL_LATAM, hover_color=self.COR_AZUL_HOVER, font=ctk.CTkFont(size=11))
+            btn.pack(side="left", padx=(5, 0))
 
     def browse_file(self, variable: tk.StringVar) -> None:
         filename = filedialog.askopenfilename()
@@ -433,10 +431,10 @@ class SAPAutomationGUI:
     def atualizar_status_sap(self, conectado: bool = False, mensagem: Optional[str] = None) -> None:
         if conectado:
             self.sap_status_var.set("SAP: Conectado")
-            self.sap_status_label.configure(text_color="#66bb6a")
+            self.sap_status_label.configure(text_color="#008000") # Verde
         else:
             self.sap_status_var.set("SAP: Desconectado")
-            self.sap_status_label.configure(text_color="#ef5350")
+            self.sap_status_label.configure(text_color=self.COR_VERMELHO_LATAM)
         if mensagem:
             self.status_var.set(mensagem)
 
@@ -762,7 +760,7 @@ class SAPAutomationGUI:
         except Exception as e: return None, f"Erro criar RC: {e}"
 
     # =========================================================================
-    #  AUTOMAÇÃO CARGO HEROES (SELENIUM RESTAURADO)
+    #  AUTOMAÇÃO CARGO HEROES VIA API (RÁPIDA)
     # =========================================================================
 
     def ch_extrair_horarios(self, texto_logistica: str) -> tuple[Optional[str], Optional[str]]:
@@ -772,7 +770,7 @@ class SAPAutomationGUI:
         if len(horarios) >= 2: return horarios[0], horarios[1]
         return None, None
 
-    def ch_calcular_data_hora(self, horario_str: str) -> Optional[str]:
+    def ch_calcular_data_hora_iso(self, horario_str: str) -> Optional[str]:
         try:
             agora = datetime.now()
             parts = horario_str.split(':')
@@ -780,49 +778,263 @@ class SAPAutomationGUI:
             data_alvo = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
             if data_alvo < agora - timedelta(hours=6):
                 data_alvo += timedelta(days=1)
-            return data_alvo.strftime("%d%m%Y%H%M")
+            return data_alvo.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         except: return None
 
-    def ch_preencher_data_js(self, driver: webdriver.Chrome, wait: WebDriverWait, xpath_id: str, texto_num: str, descricao: str = "Data") -> bool:
-        try:
-            if not texto_num or len(texto_num) < 12: return False
-            dia, mes, ano = texto_num[:2], texto_num[2:4], texto_num[4:8]
-            hora, minuto = texto_num[8:10], texto_num[10:12]
-            data_iso = f"{ano}-{mes}-{dia}T{hora}:{minuto}"
-            el = wait.until(EC.presence_of_element_located((By.XPATH, xpath_id)))
-            driver.execute_script("""
-                arguments[0].value = arguments[1];
-                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
-            """, el, data_iso)
-            return True
-        except: return False
+    # -------------------------------------------------------------------------
+    # FUNÇÕES INJETORAS DE API (JAVASCRIPT -> BROWSER -> SERVIDOR)
+    # -------------------------------------------------------------------------
+    def ch_atualizar_normal_api(self, driver: webdriver.Chrome, material: str, dados: dict) -> dict:
+        email_usuario = self.ch_email_var.get()
+        js_script = """
+        var done = arguments[arguments.length - 1];
+        var material = arguments[0];
+        var dados = arguments[1];
+        var userEmail = arguments[2];
 
-    def ch_acao(self, driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, acao: str = "clicar", texto: Optional[str] = None, desc: str = "") -> bool:
-        if not self.running: return False
-        try:
-            el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
-            if acao == "clicar":
-                try: el.click()
-                except: driver.execute_script("arguments[0].click();", el)
-            elif acao == "escrever":
-                el.clear()
-                el.send_keys(texto)
-            return True
-        except: return False
+        var token = sessionStorage.getItem('acme-user-token');
+        if (!token) { done({ok: false, error: 'TOKEN_NOT_FOUND'}); return; }
 
-    def ch_busca_material(self, driver: webdriver.Chrome, wait: WebDriverWait, material: str) -> bool:
-        try:
-            el = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@formcontrolname='equipmentCode'] | //input[contains(@data-placeholder, 'Materia')]")))
-            el.click(); time.sleep(0.2)
-            el.send_keys(Keys.CONTROL + "a"); time.sleep(0.1)
-            el.send_keys(Keys.BACKSPACE); time.sleep(0.1)
-            el.clear(); el.send_keys(material); time.sleep(1)
-            self.ch_acao(driver, wait, "//button[contains(., 'Procurar')]", "clicar")
-            time.sleep(2)
-            return True
-        except: return False
+        // --- CORREÇÃO DE FUSO HORÁRIO (Soma 3h para anular o desconto automático do Cargo Heroes) ---
+        function fixTimezone(val) {
+            if (!val) return null;
+            var strVal = String(val);
+            
+            // Se for string ISO (ex: "2026-08-31T19:00:00")
+            if (strVal.indexOf('T') !== -1) {
+                var cleanDate = strVal.replace('Z', '').replace('-03:00', '').replace('+00:00', '');
+                var parts = cleanDate.split('T');
+                var dParts = parts[0].split('-');
+                var tParts = parts[1].split(':');
+                
+                var year = parseInt(dParts[0], 10);
+                var month = parseInt(dParts[1], 10) - 1;
+                var day = parseInt(dParts[2], 10);
+                var hour = parseInt(tParts[0], 10);
+                var min = parseInt(tParts[1], 10);
+                var sec = tParts.length > 2 ? parseInt(tParts[2].split('.')[0], 10) : 0;
+                
+                // Cria o timestamp UTC adicionando 3 horas (+3) para compensar o fuso de Brasília
+                return String(Date.UTC(year, month, day, hour + 3, min, sec));
+            }
+            
+            // Se já for timestamp direto do Python, adiciona 3 horas em milissegundos (10800000 ms)
+            if (!isNaN(strVal) && strVal.length > 10) {
+                return String(parseInt(strVal, 10) + 10800000);
+            }
+            return val;
+        }
 
+        var payloadSearch = {
+            extended: {
+                states: [],
+                statesRq: ["1", "2", "3", "4", "5", "6", "7", "8"],
+                page: { page: 0, size: 20 },
+                orderBy: [{ attribute: "equipmentCode", direction: "desc" }],
+                statusExclude: false,
+                expired: "",
+                lang: "PT",
+                gmt: "GMT-0300"
+            },
+            requestCode: "", requestDate: "", baseId: "", aircraftId: "", criticalId: "", 
+            barcode: "", userId: "", description: "", requirement: "", 
+            equipmentCode: parseInt(material, 10), 
+            eqTypeId: "", partNumber: "", origin: "", destination: ""
+        };
+
+        var headersCargos = { 
+            'Authorization': 'Bearer ' + token, 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'X-Application-Name': 'LATAM',
+            'x-user-logon': String(userEmail).toUpperCase(),
+            'x-user-module': 'Logistic',
+            'x-user-screen': 'DetailLineForm'
+        };
+
+        fetch('/api/bff/requests/equipments/logistics/search', {
+            method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+            body: JSON.stringify(payloadSearch)
+        })
+        .then(res => res.json())
+        .then(list => {
+            if (!list || !list.equipments || list.equipments.length === 0) {
+                throw new Error("Material não encontrado no banco de dados.");
+            }
+
+            var itemCompleto = list.equipments[0];
+            var logisticData = itemCompleto.logistic;
+            var equipmentData = itemCompleto.equipment;
+            
+            var requestId = itemCompleto.request.requestCode;
+            var equipmentCode = equipmentData.equipmentCode;
+
+            var modalCode = dados.modal === 'Aéreo' ? 1 : 2;
+            var modalName = dados.modal === 'Aéreo' ? 'Aéreo' : 'Terrestre';
+
+            // =========================================================
+            // PACOTE 1: Atualização de Logística
+            // =========================================================
+            var updateLogistics = Object.assign({}, logisticData);
+            updateLogistics.requirement = String(dados.req);
+            updateLogistics.description = dados.texto;
+            updateLogistics.modal = { modalCode: modalCode, modalName: modalName, languages: null, langs: logisticData.modal ? logisticData.modal.langs : null };
+            updateLogistics.type = { typeCode: 3, equipmentType: "Logistic", name: "Material", languages: null }; 
+            
+            var agoraMs = String(Date.now()); 
+            updateLogistics.requisitionDate = agoraMs;
+            updateLogistics.updatedDate = agoraMs;
+            
+            var oldFlight = logisticData.flight || {};
+            updateLogistics.flight = {
+                origin: { baseCode: String(dados.origem).toUpperCase(), baseState: "1" },
+                destination: { baseCode: String(dados.destino).toUpperCase(), baseState: "1" },
+                // Função fixTimezone aplicada aos horários
+                dateBoarding: fixTimezone(dados.dateBoarding) || oldFlight.dateBoarding || null,
+                dateLanding: fixTimezone(dados.dateLanding) || oldFlight.dateLanding || null,
+                flightConnection: oldFlight.flightConnection || null,
+                finalDestination: oldFlight.finalDestination || null
+            };
+            updateLogistics.userId = userEmail;
+
+            // =========================================================
+            // PACOTE 2: Atualização de Equipamento (Status e Tipo)
+            // =========================================================
+            var STATE_AGUARDANDO_SEPARACAO = 6; 
+            var tipoMaterialOuFerramenta = equipmentData.type ? equipmentData.type.typeCode : 1;
+
+            var updateEquipment = {
+                extended: equipmentData.extended,
+                type: { typeCode: tipoMaterialOuFerramenta }, 
+                state: { stateCode: STATE_AGUARDANDO_SEPARACAO },
+                equipmentCode: equipmentData.equipmentCode,
+                partNumber: equipmentData.partNumber,
+                codOnu: equipmentData.codOnu,
+                dgrCode: equipmentData.dgrCode,
+                iw: equipmentData.iw,
+                description: equipmentData.description,
+                quantity: equipmentData.quantity,
+                observations: equipmentData.observations,
+                userId: userEmail
+            };
+
+            var urlLogistics = '/api/bff/requests/' + requestId + '/equipments/' + equipmentCode + '/logistics';
+            var urlEquipment = '/api/bff/requests/' + requestId + '/equipments/' + equipmentCode + '/upd';
+
+            return Promise.all([
+                fetch(urlLogistics, { method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors', body: JSON.stringify(updateLogistics) }),
+                fetch(urlEquipment, { method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors', body: JSON.stringify(updateEquipment) })
+            ]);
+        })
+        .then(responses => {
+            for(let res of responses) {
+                if(!res.ok) throw new Error("HTTP " + res.status + " em uma das rotas de salvamento.");
+            }
+            done({ok: true});
+        })
+        .catch(err => done({ok: false, error: err.toString()}));
+        """
+        try:
+            driver.set_script_timeout(15)
+            return driver.execute_async_script(js_script, material, dados, email_usuario)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def ch_atualizar_mapeamento_api(self, driver: webdriver.Chrome, material: str, acao_str: str) -> dict:
+        email_usuario = self.ch_email_var.get()
+        js_script = """
+        var done = arguments[arguments.length - 1];
+        var material = arguments[0];
+        var acao = arguments[1]; 
+        var userEmail = arguments[2];
+
+        var token = sessionStorage.getItem('acme-user-token');
+        if (!token) { done({ok: false, error: 'TOKEN_NOT_FOUND'}); return; }
+
+        var payloadSearch = {
+            extended: {
+                states: [],
+                statesRq: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "23"], // Expandido para cobrir os novos status
+                page: { page: 0, size: 20 },
+                orderBy: [{ attribute: "equipmentCode", direction: "desc" }],
+                statusExclude: false,
+                expired: "",
+                lang: "PT",
+                gmt: "GMT-0300"
+            },
+            requestCode: "", requestDate: "", baseId: "", aircraftId: "", criticalId: "", 
+            barcode: "", userId: "", description: "", requirement: "", 
+            equipmentCode: parseInt(material, 10), 
+            eqTypeId: "", partNumber: "", origin: "", destination: ""
+        };
+
+        var headersCargos = { 
+            'Authorization': 'Bearer ' + token, 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'X-Application-Name': 'LATAM',
+            'x-user-logon': String(userEmail).toUpperCase(),
+            'x-user-module': 'Logistic',
+            'x-user-screen': 'DetailLineForm'
+        };
+
+        fetch('/api/bff/requests/equipments/logistics/search', {
+            method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+            body: JSON.stringify(payloadSearch)
+        })
+        .then(res => res.json())
+        .then(list => {
+            if (!list || !list.equipments || list.equipments.length === 0) {
+                throw new Error("Material não encontrado no banco de dados.");
+            }
+
+            var itemCompleto = list.equipments[0];
+            var equipmentData = itemCompleto.equipment; 
+            
+            var requestId = itemCompleto.request.requestCode;
+            var equipmentCode = equipmentData.equipmentCode;
+
+            // Define os State Codes exatos capturados nos seus prints
+            var novoStateCode = acao === 'BASE' ? 10 : 23; 
+            
+            // Verifica o tipo do equipamento (se não existir, assume Material = 1)
+            var tipoMaterialOuFerramenta = equipmentData.type ? equipmentData.type.typeCode : 1;
+
+            var updatePayload = {
+                extended: equipmentData.extended,
+                type: { typeCode: tipoMaterialOuFerramenta },
+                state: { stateCode: novoStateCode },
+                equipmentCode: equipmentData.equipmentCode,
+                partNumber: equipmentData.partNumber,
+                codOnu: equipmentData.codOnu,
+                dgrCode: equipmentData.dgrCode,
+                iw: equipmentData.iw,
+                description: equipmentData.description,
+                quantity: equipmentData.quantity,
+                observations: equipmentData.observations,
+                userId: userEmail
+            };
+
+            return fetch('/api/bff/requests/' + requestId + '/equipments/' + equipmentCode + '/upd', { 
+                method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+                body: JSON.stringify(updatePayload)
+            });
+        })
+        .then(res => {
+            if(!res.ok) return res.text().then(errText => { throw new Error("HTTP " + res.status + " - " + errText); });
+            done({ok: true});
+        })
+        .catch(err => done({ok: false, error: err.toString()}));
+        """
+        try:
+            driver.set_script_timeout(15)
+            return driver.execute_async_script(js_script, material, acao_str, email_usuario)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        
+    # -------------------------------------------------------------------------
+    # FLUXO PRINCIPAL - CARGO HEROES
+    # -------------------------------------------------------------------------
     def start_ch_automation(self) -> None:
         if self.running: return
         email = self.ch_email_var.get()
@@ -832,7 +1044,7 @@ class SAPAutomationGUI:
             return
         self.running = True
         self.toggle_buttons(False)
-        self.status_var.set("Executando Cargo Heroes...")
+        self.status_var.set("Executando Cargo Heroes via API...")
         self.log_area.configure(state="normal")
         self.log_area.delete("1.0", "end")
         self.log_area.configure(state="disabled")
@@ -842,10 +1054,17 @@ class SAPAutomationGUI:
     def run_ch_automation(self) -> None:
         driver = None
         try:
-            self.print_header("Iniciando Cargo Heroes Updater")
+            self.print_header("Iniciando Cargo Heroes Updater (Modo API Rápida)")
             opts = Options()
             opts.add_argument("--start-maximized")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+            opts.add_experimental_option('useAutomationExtension', False)
+            
             driver = webdriver.Chrome(options=opts)
+            driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                'source': "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            })
             wait = WebDriverWait(driver, 20)
             
             self.print_info("Conectando Planilha Google...")
@@ -858,10 +1077,17 @@ class SAPAutomationGUI:
             
             driver.get("https://cargo-heroes.appslatam.com/#/login")
             if self.ch_realizar_login(driver, wait):
-                if self.ch_navegar_detalhe(driver, wait):
-                    if self.running: self.ch_processar_normal(driver, wait, aba_n)
-                    if self.running and aba_m: self.ch_processar_mapeamento(driver, wait, aba_m)
-                    self.print_sucesso("Processo CH finalizado!")
+                self.print_info("Login Realizado. Carregando sessão interna do sistema...")
+                driver.get("https://cargo-heroes.appslatam.com/#/app/requests")
+                time.sleep(4) 
+                
+                # --- MELHORIA 1: Minimiza o navegador para rodar em "Segundo Plano" ---
+                driver.minimize_window()
+                self.print_info("Navegador minimizado. O processamento via API continuará em segundo plano.")
+                
+                if self.running: self.ch_processar_normal(driver, aba_n)
+                if self.running and aba_m: self.ch_processar_mapeamento(driver, aba_m)
+                self.print_sucesso("Processo CH finalizado!")
             else:
                 self.print_erro("Falha no Login CH.")
         except Exception as e: self.print_erro(f"Erro Fatal CH: {e}")
@@ -872,147 +1098,202 @@ class SAPAutomationGUI:
             self.root.after(0, self.finalize_automation)
 
     def ch_realizar_login(self, driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
-        self.print_info("🔑 Realizando Login...")
+        self.print_info("🔑 Realizando Login Automático (SSO/SAML LATAM)...")
         try:
             email = self.ch_email_var.get()
             senha = self.ch_pass_var.get()
+            
+            janela_principal = driver.current_window_handle
+            
+            # 1. Aciona o Botão do Google
             try:
                 iframe = wait.until(EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src, 'gsi/button')]")))
                 driver.switch_to.frame(iframe)
-                driver.execute_script("arguments[0].click();", wait.until(EC.element_to_be_clickable((By.XPATH, "//div[@role='button']"))))
+                btn_google = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[@role='button']")))
+                driver.execute_script("arguments[0].click();", btn_google)
                 driver.switch_to.default_content()
-            except: driver.switch_to.default_content()
-            try:
-                WebDriverWait(driver, 5).until(EC.number_of_windows_to_be(2))
-                jp = driver.current_window_handle
-                jv = [j for j in driver.window_handles if j != jp][0]
-                driver.switch_to.window(jv)
-                try:
-                    c = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.ID, "i0116")))
-                    c.send_keys(email); driver.find_element(By.ID, "idSIButton9").click()
-                    s = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "i0118")))
-                    s.send_keys(senha); time.sleep(0.5); driver.find_element(By.ID, "idSIButton9").click()
-                    try: WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.ID, "idSIButton9"))).click()
-                    except: pass
-                except: pass
-                driver.switch_to.window(jp)
-            except: pass
+            except: 
+                driver.switch_to.default_content()
             
+            # 2. Máquina de Estados para lidar com o Popup Dinâmico
+            try:
+                WebDriverWait(driver, 10).until(EC.number_of_windows_to_be(2))
+                janela_popup = [j for j in driver.window_handles if j != janela_principal][0]
+                driver.switch_to.window(janela_popup)
+                
+                t_end = time.time() + 60
+                while time.time() < t_end:
+                    if len(driver.window_handles) == 1:
+                        break # O popup fechou sozinho, login concluído!
+                        
+                    try:
+                        url_popup = driver.current_url.lower()
+                        
+                        # FASE A: Inserir Email no Google
+                        if "accounts.google.com" in url_popup and "identifier" in url_popup:
+                            try:
+                                inp = driver.find_element(By.XPATH, "//input[@type='email' or @id='identifierId']")
+                                if inp.is_displayed() and inp.get_attribute('value') == "":
+                                    inp.clear()
+                                    inp.send_keys(email)
+                                    inp.send_keys(Keys.ENTER)
+                                    time.sleep(2)
+                            except: pass
+
+                        # FASE B: Tela "Confirme que é você"
+                        elif "speedbump/samlconfirmaccount" in url_popup:
+                            try:
+                                btn = driver.find_element(By.XPATH, "//span[text()='Continuar' or text()='Continue']/ancestor::button")
+                                if btn.is_displayed():
+                                    driver.execute_script("arguments[0].click();", btn)
+                                    time.sleep(2)
+                            except: pass
+
+                        # FASE C: Microsoft SSO (Email e Senha)
+                        elif "microsoftonline.com" in url_popup or "live.com" in url_popup:
+                            try:
+                                # Insere Email (se pedir)
+                                inp_email = driver.find_element(By.ID, "i0116")
+                                if inp_email.is_displayed() and inp_email.get_attribute('value') == "":
+                                    inp_email.clear()
+                                    inp_email.send_keys(email)
+                                    inp_email.send_keys(Keys.ENTER)
+                                    time.sleep(2)
+                            except: pass
+                            
+                            try:
+                                # Insere Senha
+                                inp_senha = driver.find_element(By.ID, "i0118")
+                                if inp_senha.is_displayed() and inp_senha.get_attribute('value') == "":
+                                    inp_senha.clear()
+                                    inp_senha.send_keys(senha)
+                                    inp_senha.send_keys(Keys.ENTER)
+                                    time.sleep(2)
+                            except: pass
+                            
+                            try:
+                                # Botão "Continuar conectado?"
+                                btn_yes = driver.find_element(By.ID, "idSIButton9")
+                                if btn_yes.is_displayed():
+                                    btn_yes.click()
+                                    time.sleep(2)
+                            except: pass
+                        
+                        time.sleep(1)
+                    except:
+                        time.sleep(1)
+                
+                # Foco de volta à janela principal
+                try: driver.switch_to.window(janela_principal)
+                except: pass
+
+            except Exception as popup_err:
+                self.print_aviso(f"Tentativa de bypass manual de popup. Aguardando. Detalhe: {popup_err}")
+                try: driver.switch_to.window(janela_principal)
+                except: pass
+            
+            # 3. Confirmação do sucesso
             t0 = time.time()
             while time.time() - t0 < 60 and self.running:
                 u = driver.current_url
-                if "/login" not in u and "app" in u: return True
+                if "/login" not in u and "app" in u: 
+                    return True
                 time.sleep(1)
-        except Exception as e: self.print_erro(f"Erro login CH: {e}")
+                
+        except Exception as e: 
+            self.print_erro(f"Erro fluxo login CH: {e}")
+            
         return False
-
-    def ch_navegar_detalhe(self, driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
-        self.print_info("Navegando ao menu Detalhe por linha...")
-        try: wait.until(EC.invisibility_of_element_located((By.ID, "loading-bar")))
-        except: pass
-        time.sleep(2)
-        try:
-            wait.until(EC.element_to_be_clickable((By.XPATH, "//mat-icon[contains(text(), 'menu')]"))).click()
-            time.sleep(1)
-            wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Logística')]"))).click()
-            time.sleep(1)
-            wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Detalhe por linha')]"))).click()
-            time.sleep(3)
-            return True
-        except: return False
-
-    def ch_processar_normal(self, driver: webdriver.Chrome, wait: WebDriverWait, aba: Any) -> None:
-        self.print_header("Processando Aba Normal - Cargo Heroes")
+    
+    def ch_processar_normal(self, driver: webdriver.Chrome, aba: Any) -> None:
+        self.print_header("Processando Aba Normal (Via API) - Cargo Heroes")
         d = aba.get_all_records()
         try: col = aba.row_values(1).index("CH OK") + 1
         except: return
+        
+        updates_planilha = [] 
+        
         for i, l in enumerate(d, start=2):
             if not self.running: break
+            
             mat = str(l.get('Material ID', '')).strip()
             if not mat or str(l.get('CH OK', '')).upper() == "OK": continue
-            self.print_info(f"Linha {i}: Editando {mat}...")
-            try:
-                if not self.ch_busca_material(driver, wait, mat): raise Exception("Falha busca")
-                self.ch_acao(driver, wait, "//*[@id='dataTable']/tbody/tr/td[1]/a/i", "clicar")
-                time.sleep(3)
-                
-                req = str(l.get('REQUISIÇÃO', ''))
-                self.ch_acao(driver, wait, "//input[@formcontrolname='requirement']", "escrever", texto=req)
-                self.ch_acao(driver, wait, "//*[@formcontrolname='typeAtd']", "clicar")
-                time.sleep(0.5)
-                self.ch_acao(driver, wait, "//mat-option//span[contains(text(), 'Material')]", "clicar")
-                
-                tm = "Aéreo" if "Aéreo" in str(l.get('Tipo de Transporte', '')) else "Terrestre"
-                self.ch_acao(driver, wait, "//*[@formcontrolname='modal']", "clicar")
-                time.sleep(0.5)
-                self.ch_acao(driver, wait, f"//mat-option//span[contains(text(), '{tm}')]", "clicar")
-                
-                self.ch_acao(driver, wait, "//input[@formcontrolname='origin']", "escrever", texto=str(l.get('Origem Sigla')))
-                self.ch_acao(driver, wait, "//input[@formcontrolname='destination']", "escrever", texto=str(l.get('Destino Sigla')))
-                
-                tl = str(l.get('Logística', ''))
-                self.ch_acao(driver, wait, "//input[@formcontrolname='desc']", "escrever", texto=tl)
-                
-                hs, hc = self.ch_extrair_horarios(tl)
-                if hs and hc:
-                    ds, dc = self.ch_calcular_data_hora(hs), self.ch_calcular_data_hora(hc)
-                    if ds and dc:
-                        self.ch_preencher_data_js(driver, wait, "//*[@id='dateBoarding']", ds)
-                        self.ch_preencher_data_js(driver, wait, "//*[@id='dateLanding']", dc)
-                
-                self.ch_acao(driver, wait, "//button[contains(., 'Salve')] | //button[contains(., 'Salvar')]", "clicar")
-                try:
-                    wait.until(EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Solicitação Atendida')]")))
-                    aba.update_cell(i, col, "OK")
-                    self.print_sucesso(f"Linha {i} OK")
-                except: raise Exception("Confirmação não apareceu")
-                
-                driver.refresh(); time.sleep(3); self.ch_navegar_detalhe(driver, wait)
-            except Exception as e:
-                self.print_erro(f"Erro linha {i}: {e}")
-                aba.update_cell(i, col, "ERRO")
-                driver.refresh(); time.sleep(3); self.ch_navegar_detalhe(driver, wait)
+            
+            self.print_info(f"Linha {i}: Editando ID de {mat} via API...")
+            
+            req = str(l.get('REQUISIÇÃO', ''))
+            tm = "Aéreo" if "Aéreo" in str(l.get('Tipo de Transporte', '')) else "Terrestre"
+            origem = str(l.get('Origem Sigla', ''))
+            destino = str(l.get('Destino Sigla', ''))
+            tl = str(l.get('Logística', ''))
+            
+            hs, hc = self.ch_extrair_horarios(tl)
+            ds_iso, dc_iso = None, None
+            if hs and hc:
+                ds_iso = self.ch_calcular_data_hora_iso(hs)
+                dc_iso = self.ch_calcular_data_hora_iso(hc)
 
-    def ch_processar_mapeamento(self, driver: webdriver.Chrome, wait: WebDriverWait, aba: Any) -> None:
-        self.print_header("Processando Aba Mapeamento - Cargo Heroes")
+            dados_api = {
+                "req": req, "modal": tm, "origem": origem, "destino": destino,
+                "texto": tl, "dateBoarding": ds_iso, "dateLanding": dc_iso
+            }
+
+            resultado = self.ch_atualizar_normal_api(driver, mat, dados_api)
+            
+            celula_a1 = gspread.utils.rowcol_to_a1(i, col)
+            if resultado.get("ok"):
+                updates_planilha.append({'range': celula_a1, 'values': [["OK"]]})
+                self.print_sucesso(f"Linha {i} ({mat}) Atualizada Instantaneamente!")
+            else:
+                self.print_erro(f"Erro na linha {i} ({mat}): {resultado.get('error')}")
+                updates_planilha.append({'range': celula_a1, 'values': [["ERRO"]]})
+            
+            time.sleep(0.3)
+            
+        if updates_planilha:
+            self.print_info("Sincronizando resultados com o Google Sheets...")
+            self._batch_update_planilha(aba, updates_planilha)
+
+    def ch_processar_mapeamento(self, driver: webdriver.Chrome, aba: Any) -> None:
+        self.print_header("Processando Aba Mapeamento (Via API) - Cargo Heroes")
         d = aba.get_all_records()
         try: col = aba.row_values(1).index("CH OK") + 1
         except: return
+        
+        updates_planilha = []
+        
         for i, l in enumerate(d, start=2):
             if not self.running: break
+            
             mat = str(l.get('Material ID', '')).strip()
             st = str(l.get('CH OK', '')).strip().upper()
             orig = str(l.get('ORIGEM', '')).strip().upper()
+            
             if not mat or st == "OK" or ("NA BASE" not in orig and "ZERO" not in orig): continue
             
-            self.print_info(f"Mapeamento Linha {i}: {mat}")
-            try:
-                if not self.ch_busca_material(driver, wait, mat): raise Exception("Falha busca")
-                self.ch_acao(driver, wait, "//*[@id='dataTable']/tbody/tr/td[1]/a/i", "clicar")
-                time.sleep(3)
-                
-                if "NA BASE" in orig: self.ch_acao(driver, wait, "//button[contains(., 'Mtl na Base')]", "clicar")
-                elif "ZERO" in orig: self.ch_acao(driver, wait, "//button[contains(., 'Mtl Stk Zero')]", "clicar")
-                
-                self.ch_acao(driver, wait, "//button[contains(., 'Salve')] | //button[contains(., 'Salvar')]", "clicar")
-                try:
-                    wait.until(EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Solicitação Atendida')]")))
-                    aba.update_cell(i, col, "OK")
-                    self.print_sucesso(f"Linha {i} Mapeamento OK")
-                except: raise Exception("Sem confirmação")
-                driver.refresh(); time.sleep(3); self.ch_navegar_detalhe(driver, wait)
-            except Exception as e:
-                self.print_erro(f"Erro mapeamento {i}: {e}")
-                driver.refresh(); time.sleep(3); self.ch_navegar_detalhe(driver, wait)
+            acao = 'BASE' if 'NA BASE' in orig else 'ZERO'
+            self.print_info(f"Mapeamento Linha {i}: Ajustando {mat} ({acao}) via API...")
+            
+            resultado = self.ch_atualizar_mapeamento_api(driver, mat, acao)
+            
+            celula_a1 = gspread.utils.rowcol_to_a1(i, col)
+            if resultado.get("ok"):
+                updates_planilha.append({'range': celula_a1, 'values': [["OK"]]})
+                self.print_sucesso(f"Linha {i} ({mat}) Mapeada Instantaneamente!")
+            else:
+                self.print_erro(f"Erro na linha {i} ({mat}): {resultado.get('error')}")
+                updates_planilha.append({'range': celula_a1, 'values': [["ERRO"]]})
+            
+            time.sleep(0.3)
+            
+        if updates_planilha:
+            self.print_info("Sincronizando resultados do mapeamento com o Google Sheets...")
+            self._batch_update_planilha(aba, updates_planilha)
 
-
-def main() -> None:
+if __name__ == "__main__":
     root = ctk.CTk()
     app = SAPAutomationGUI(root)
     root.attributes('-topmost', True)
     root.update()
     root.attributes('-topmost', False)
     root.mainloop()
-
-if __name__ == "__main__":
-    main()
