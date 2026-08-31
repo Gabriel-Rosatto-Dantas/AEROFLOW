@@ -25,8 +25,6 @@ import threading
 from PIL import Image, ImageTk
 import io
 import base64
-import logging
-from logging.handlers import RotatingFileHandler
 import ssl
 import certifi
 from typing import Optional, Any
@@ -94,8 +92,8 @@ class LogRedirector:
                     self.text_widget.insert(tk.END, segment, tags=(current_tag,))
             self.text_widget.see(tk.END)
             self.text_widget.configure(state="disabled")
-        except Exception as e:
-            logging.debug(f"LogRedirector falhou: {e}")
+        except Exception:
+            pass
 
     def flush(self) -> None:
         pass
@@ -139,12 +137,6 @@ class SAPAutomationGUI:
         self.resource_path: str = self.get_resource_path()
         
         self.config_path: str = os.path.join(self.data_path, 'config.ini')
-        self.logs_print_path: str = os.path.join(self.data_path, 'logs', 'prints')
-
-        if not os.path.exists(self.logs_print_path):
-            os.makedirs(self.logs_print_path, exist_ok=True)
-
-        self._setup_file_logger()
 
         try:
             self.config.read(self.config_path, encoding='utf-8')
@@ -167,23 +159,6 @@ class SAPAutomationGUI:
 
     def fix_base64_padding(self, b64_string: str) -> str:
         return b64_string + "=" * ((4 - len(b64_string) % 4) % 4)
-
-    def _setup_file_logger(self) -> None:
-        log_file_path = os.path.join(self.data_path, 'app_log.txt')
-        file_handler = RotatingFileHandler(
-            log_file_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8'
-        )
-        file_handler.setFormatter(logging.Formatter(
-            '[%(asctime)s] [%(levelname)s] %(message)s',
-            datefmt='%d/%m/%Y %H:%M:%S'
-        ))
-        file_handler.setLevel(logging.INFO)
-
-        logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-        logger.addHandler(file_handler)
 
     def get_data_path(self) -> str:
         if getattr(sys, 'frozen', False):
@@ -454,29 +429,19 @@ class SAPAutomationGUI:
         return datetime.now().strftime('%H:%M:%S')
 
     def print_header(self, texto: str) -> None:
-        log_text = f"\n[{self._get_timestamp()}] 🚀 {texto.upper()}\n"
-        print(f"<<AZUL>>{log_text}<<RESET>>")
-        logging.info(texto)
+        print(f"<<AZUL>>\n[{self._get_timestamp()}] 🚀 {texto.upper()}\n<<RESET>>")
 
     def print_sucesso(self, texto: str) -> None:
-        log_text = f"[{self._get_timestamp()}] ✔  SUCESSO:  {texto}\n"
-        print(f"<<VERDE>>{log_text}<<RESET>>")
-        logging.info(f"[SUCESSO] {texto}")
+        print(f"<<VERDE>>[{self._get_timestamp()}] ✔  SUCESSO:  {texto}\n<<RESET>>")
 
     def print_info(self, texto: str) -> None:
-        log_text = f"[{self._get_timestamp()}] ℹ  INFO:     {texto}\n"
-        print(f"<<CIANO>>{log_text}<<RESET>>")
-        logging.info(texto)
+        print(f"<<CIANO>>[{self._get_timestamp()}] ℹ  INFO:     {texto}\n<<RESET>>")
 
     def print_aviso(self, texto: str) -> None:
-        log_text = f"[{self._get_timestamp()}] ⚠  AVISO:    {texto}\n"
-        print(f"<<AMARELO>>{log_text}<<RESET>>")
-        logging.warning(texto)
+        print(f"<<AMARELO>>[{self._get_timestamp()}] ⚠  AVISO:    {texto}\n<<RESET>>")
 
     def print_erro(self, texto: str) -> None:
-        log_text = f"[{self._get_timestamp()}] ✖  ERRO:     {texto}\n"
-        print(f"<<VERMELHO>>{log_text}<<RESET>>")
-        logging.error(texto)
+        print(f"<<VERMELHO>>[{self._get_timestamp()}] ✖  ERRO:     {texto}\n<<RESET>>")
 
     # =========================================================================
     #  AUTOMAÇÃO SAP

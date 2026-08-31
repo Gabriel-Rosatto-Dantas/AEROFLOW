@@ -1,19 +1,28 @@
-# Arquivos de Ambiente Virtual
+# Ambiente Virtual
 venv/
 /venv
 *.env
 .env
 
-# Arquivos de cache e compilados do Python
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Arquivos de configuração e credenciais (o que você já tinha)
+# Configuração e credenciais
 config.ini
 credentials.json
 
-# Arquivos de IDE (opcional, mas boa prática)
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Logs
+app_log.txt
+logs/
+
+# IDE
 .vscode/
 .idea/
