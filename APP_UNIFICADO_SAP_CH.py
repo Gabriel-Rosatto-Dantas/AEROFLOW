@@ -239,7 +239,7 @@ class SAPAutomationGUI:
         self.sap_status_label = ctk.CTkLabel(self.status_frame, textvariable=self.sap_status_var, text_color=self.COR_VERMELHO_LATAM, font=ctk.CTkFont(weight="bold", size=11))
         self.sap_status_label.pack(side="left")
 
-        self.status_var = tk.StringVar(value="Pronto")
+        self.status_var = tk.StringVar(value="Created by Dantas")
         self.status_label = ctk.CTkLabel(self.status_frame, textvariable=self.status_var, text_color="#666666", font=ctk.CTkFont(size=11))
         self.status_label.pack(side="right")
 
