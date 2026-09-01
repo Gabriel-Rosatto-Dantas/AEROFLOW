@@ -1,13 +1,6 @@
-import subprocess, sys, glob, os
+import subprocess, sys
 
-# Localiza a pasta de runtime gerada pelo PyArmor (nome contém hash)
-runtime_dirs = glob.glob("obf/pyarmor_runtime_*")
-if not runtime_dirs:
-    sys.exit("ERRO: nenhuma pasta pyarmor_runtime_* encontrada em obf/")
-
-runtime_dir  = runtime_dirs[0]
-runtime_name = os.path.basename(runtime_dir)
-
+# PyArmor 7 gera obf/pytransform/ (pasta fixa, sem hash no nome)
 cmd = [
     sys.executable, "-m", "PyInstaller",
     "obf/APP_UNIFICADO_SAP_CH.py",
@@ -16,7 +9,7 @@ cmd = [
     "--noconsole",
     "--clean",
     "--icon",      "icone.ico",
-    "--add-data",  f"{runtime_dir};{runtime_name}",
+    "--add-data",  "obf/pytransform;pytransform",
     "--add-data",  "icone.ico;.",
 ]
 print("Executando:", " ".join(cmd))
