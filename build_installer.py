@@ -4,7 +4,7 @@ cmd = [
     sys.executable, "-m", "PyInstaller",
     "APP_UNIFICADO_SAP_CH.py",
     "--name",      "AeroFlow",
-    "--onedir",
+    "--onefile",
     "--noconsole",
     "--clean",
     "--icon",      "icone.ico",

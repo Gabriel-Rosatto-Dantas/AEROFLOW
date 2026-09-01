@@ -1,4 +1,4 @@
-name: Build AeroFlow Installer
+name: Build AeroFlow
 
 on:
   push:
@@ -30,24 +30,10 @@ jobs:
       - name: Build executable with PyInstaller
         run: python build_installer.py
 
-      - name: Install Inno Setup
-        run: choco install innosetup --yes
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag.TrimStart('v')
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-        shell: pwsh
-
-      - name: Compile installer
-        run: iscc /DMyAppVersion=${{ steps.version.outputs.version }} instalador.iss
-
-      - name: Upload installer to GitHub Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: AeroFlow ${{ github.ref_name }}
-          files: Output/AeroFlow_Setup.exe
+          files: dist/AeroFlow.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
