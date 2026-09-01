@@ -219,7 +219,7 @@ class SAPAutomationGUI:
 
     def create_widgets(self) -> None:
         # Título menor e com menos margem
-        self.header_label = ctk.CTkLabel(self.root, text="AeroFlow", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.COR_AZUL_LATAM)
+        self.header_label = ctk.CTkLabel(self.root, text="Automação Integrada SAP & Cargo Heroes", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.COR_AZUL_LATAM)
         self.header_label.pack(pady=(10, 5))
 
         self.tabview = ctk.CTkTabview(self.root, width=620, height=330,
