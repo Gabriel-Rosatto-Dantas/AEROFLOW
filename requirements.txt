@@ -3,7 +3,7 @@ customtkinter==5.2.2
 gspread==6.2.1
 keyring==25.1.0
 oauth2client==4.1.3
-pandas==2.2.3
+pandas==3.0.0
 pillow==12.1.0
 pywin32==311
 selenium==4.40.0
