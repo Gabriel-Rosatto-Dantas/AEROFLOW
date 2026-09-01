@@ -18,6 +18,8 @@ credentials.json
 build/
 dist/
 *.spec
+obf/
+Output/
 
 # Logs
 app_log.txt
