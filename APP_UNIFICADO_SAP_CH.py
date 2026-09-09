@@ -1,11 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Automação Integrada — SAP & Cargo Heroes
-Criação massiva de Requisições de Compra (ME51N) e atualização no Cargo Heroes via API.
-
-Refatoração Profissional UI (CustomTkinter LATAM Theme) + Correções de Segurança/Threading + API Bypass
-"""
-
 import pandas as pd
 import win32com.client
 import sys
@@ -56,6 +48,13 @@ except ImportError:
 # Constantes de Segurança
 KEYRING_SERVICE_SAP = "sap_automation_req_massivo"
 KEYRING_SERVICE_CH = "cargo_heroes_automation"
+
+# Cargo Heroes: a linha só é considerada concluída depois que a API confirma
+# os dados de logística e o status "Aguardando separação" (stateCode 6).
+CH_STATE_AGUARDANDO_SEPARACAO = 6
+CH_TENTATIVAS_ATUALIZACAO = 3
+CH_TENTATIVAS_VALIDACAO = 4
+CH_INTERVALO_VALIDACAO_SEGUNDOS = 1.5
 
 # Configuração SSL segura
 ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
@@ -443,9 +442,6 @@ class SAPAutomationGUI:
     def print_erro(self, texto: str) -> None:
         print(f"<<VERMELHO>>[{self._get_timestamp()}] ✖  ERRO:     {texto}\n<<RESET>>")
 
-    # =========================================================================
-    #  AUTOMAÇÃO SAP
-    # =========================================================================
     def start_automation(self) -> None:
         if self.running: return
         if not self.validate_config():
@@ -724,10 +720,6 @@ class SAPAutomationGUI:
             return None, m
         except Exception as e: return None, f"Erro criar RC: {e}"
 
-    # =========================================================================
-    #  AUTOMAÇÃO CARGO HEROES VIA API (RÁPIDA)
-    # =========================================================================
-
     def ch_extrair_horarios(self, texto_logistica: str) -> tuple[Optional[str], Optional[str]]:
         texto = str(texto_logistica).strip()
         padrao_hora = r'\b(?:[01]?\d|2[0-3]):[0-5]\d\b'
@@ -746,9 +738,6 @@ class SAPAutomationGUI:
             return data_alvo.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         except: return None
 
-    # -------------------------------------------------------------------------
-    # FUNÇÕES INJETORAS DE API (JAVASCRIPT -> BROWSER -> SERVIDOR)
-    # -------------------------------------------------------------------------
     def ch_atualizar_normal_api(self, driver: webdriver.Chrome, material: str, dados: dict) -> dict:
         email_usuario = self.ch_email_var.get()
         js_script = """
@@ -886,16 +875,36 @@ class SAPAutomationGUI:
             var urlLogistics = '/api/bff/requests/' + requestId + '/equipments/' + equipmentCode + '/logistics';
             var urlEquipment = '/api/bff/requests/' + requestId + '/equipments/' + equipmentCode + '/upd';
 
-            return Promise.all([
-                fetch(urlLogistics, { method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors', body: JSON.stringify(updateLogistics) }),
-                fetch(urlEquipment, { method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors', body: JSON.stringify(updateEquipment) })
-            ]);
+            // As duas rotas são dependentes no backend. O envio simultâneo
+            // ocasionalmente persistia apenas uma delas; por isso a logística
+            // é gravada primeiro e, só então, o status do material.
+            return fetch(urlLogistics, {
+                method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+                body: JSON.stringify(updateLogistics)
+            })
+            .then(res => {
+                if (!res.ok) {
+                    return res.text().then(errText => {
+                        throw new Error("HTTP " + res.status + " ao gravar logística: " + errText);
+                    });
+                }
+                return new Promise(resolve => setTimeout(resolve, 250));
+            })
+            .then(() => fetch(urlEquipment, {
+                method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+                body: JSON.stringify(updateEquipment)
+            }))
+            .then(res => {
+                if (!res.ok) {
+                    return res.text().then(errText => {
+                        throw new Error("HTTP " + res.status + " ao gravar status: " + errText);
+                    });
+                }
+                return { requestId: requestId, equipmentCode: equipmentCode };
+            });
         })
-        .then(responses => {
-            for(let res of responses) {
-                if(!res.ok) throw new Error("HTTP " + res.status + " em uma das rotas de salvamento.");
-            }
-            done({ok: true});
+        .then(result => {
+            done({ok: true, requestId: result.requestId, equipmentCode: result.equipmentCode});
         })
         .catch(err => done({ok: false, error: err.toString()}));
         """
@@ -904,6 +913,191 @@ class SAPAutomationGUI:
             return driver.execute_async_script(js_script, material, dados, email_usuario)
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def ch_validar_atualizacao_normal_api(
+        self,
+        driver: webdriver.Chrome,
+        material: str,
+        dados: dict,
+    ) -> dict:
+        email_usuario = self.ch_email_var.get()
+        js_script = """
+        var done = arguments[arguments.length - 1];
+        var material = arguments[0];
+        var dados = arguments[1];
+        var userEmail = arguments[2];
+        var STATE_AGUARDANDO_SEPARACAO = 6;
+
+        var token = sessionStorage.getItem('acme-user-token');
+        if (!token) { done({ok: false, error: 'TOKEN_NOT_FOUND'}); return; }
+
+        function normalizar(valor) {
+            return String(valor === undefined || valor === null ? '' : valor)
+                .normalize('NFD')
+                .replace(/[\\u0300-\\u036f]/g, '')
+                .replace(/\\s+/g, ' ')
+                .trim()
+                .toUpperCase();
+        }
+
+        function obterStateCode(equipment) {
+            var state = equipment && equipment.state ? equipment.state : {};
+            return Number(state.stateCode || equipment.stateCode || state.code || 0);
+        }
+
+        function obterStateNome(equipment) {
+            var state = equipment && equipment.state ? equipment.state : {};
+            return state.stateName || state.name || state.description || equipment.stateName || '';
+        }
+
+        var payloadSearch = {
+            extended: {
+                states: [],
+                statesRq: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "23"],
+                page: { page: 0, size: 20 },
+                orderBy: [{ attribute: "equipmentCode", direction: "desc" }],
+                statusExclude: false,
+                expired: "",
+                lang: "PT",
+                gmt: "GMT-0300"
+            },
+            requestCode: "", requestDate: "", baseId: "", aircraftId: "", criticalId: "",
+            barcode: "", userId: "", description: "", requirement: "",
+            equipmentCode: parseInt(material, 10),
+            eqTypeId: "", partNumber: "", origin: "", destination: ""
+        };
+
+        var headersCargos = {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'X-Application-Name': 'LATAM',
+            'x-user-logon': String(userEmail).toUpperCase(),
+            'x-user-module': 'Logistic',
+            'x-user-screen': 'DetailLineForm'
+        };
+
+        fetch('/api/bff/requests/equipments/logistics/search', {
+            method: 'POST', headers: headersCargos, credentials: 'include', mode: 'cors',
+            body: JSON.stringify(payloadSearch)
+        })
+        .then(res => {
+            if (!res.ok) {
+                return res.text().then(errText => {
+                    throw new Error('HTTP ' + res.status + ' ao consultar validação: ' + errText);
+                });
+            }
+            return res.json();
+        })
+        .then(list => {
+            var itens = list && Array.isArray(list.equipments) ? list.equipments : [];
+            if (!itens.length) throw new Error('Material não encontrado na validação.');
+
+            // Quando existir mais de uma ocorrência do material, prioriza a
+            // que pertence à mesma requisição informada pela planilha.
+            var item = itens.find(x => normalizar(x.logistic && x.logistic.requirement) === normalizar(dados.req)) || itens[0];
+            var equipment = item.equipment || {};
+            var logistic = item.logistic || {};
+            var flight = logistic.flight || {};
+            var stateCode = obterStateCode(equipment);
+            var stateName = obterStateNome(equipment);
+            var statusOk = stateCode === STATE_AGUARDANDO_SEPARACAO ||
+                normalizar(stateName).indexOf('AGUARDANDO SEPARACAO') !== -1;
+            var modal = logistic.modal || {};
+            var dadosLogisticaOk =
+                normalizar(logistic.requirement) === normalizar(dados.req) &&
+                normalizar(logistic.description) === normalizar(dados.texto) &&
+                (Number(modal.modalCode || modal.code || 0) === (dados.modal === 'Aéreo' ? 1 : 2) ||
+                 normalizar(modal.modalName || modal.name).indexOf(normalizar(dados.modal)) !== -1) &&
+                normalizar(flight.origin && flight.origin.baseCode) === normalizar(dados.origem) &&
+                normalizar(flight.destination && flight.destination.baseCode) === normalizar(dados.destino);
+
+            done({
+                ok: true,
+                valido: statusOk && dadosLogisticaOk,
+                statusOk: statusOk,
+                dadosLogisticaOk: dadosLogisticaOk,
+                stateCode: stateCode,
+                stateName: stateName || '',
+                requestId: item.request ? item.request.requestCode : '',
+                equipmentCode: equipment.equipmentCode || material
+            });
+        })
+        .catch(err => done({ok: false, error: err.toString()}));
+        """
+        try:
+            driver.set_script_timeout(15)
+            return driver.execute_async_script(js_script, material, dados, email_usuario)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def ch_atualizar_normal_com_validacao(
+        self,
+        driver: webdriver.Chrome,
+        material: str,
+        dados: dict,
+        linha: int,
+    ) -> dict:
+        ultimo_resultado: dict = {"ok": False, "error": "Validação não executada."}
+
+        for tentativa in range(1, CH_TENTATIVAS_ATUALIZACAO + 1):
+            if not self.running:
+                return {"ok": False, "error": "Processamento interrompido pelo usuário."}
+
+            if tentativa > 1:
+                self.print_aviso(
+                    f"Linha {linha} ({material}): reaplicando atualização "
+                    f"({tentativa}/{CH_TENTATIVAS_ATUALIZACAO})."
+                )
+
+            resultado_atualizacao = self.ch_atualizar_normal_api(driver, material, dados)
+            if not resultado_atualizacao.get("ok"):
+                ultimo_resultado = resultado_atualizacao
+                self.print_aviso(
+                    f"Linha {linha} ({material}): API não confirmou a gravação "
+                    f"na tentativa {tentativa}: {resultado_atualizacao.get('error', 'erro não informado')}"
+                )
+                time.sleep(CH_INTERVALO_VALIDACAO_SEGUNDOS)
+                continue
+
+            
+            for consulta in range(1, CH_TENTATIVAS_VALIDACAO + 1):
+                if not self.running:
+                    return {"ok": False, "error": "Processamento interrompido pelo usuário."}
+
+                time.sleep(CH_INTERVALO_VALIDACAO_SEGUNDOS)
+                validacao = self.ch_validar_atualizacao_normal_api(driver, material, dados)
+                ultimo_resultado = validacao
+
+                if validacao.get("ok") and validacao.get("valido"):
+                    validacao["tentativa"] = tentativa
+                    validacao["consulta"] = consulta
+                    return validacao
+
+                if validacao.get("ok"):
+                    self.print_aviso(
+                        f"Linha {linha} ({material}): validação {consulta}/"
+                        f"{CH_TENTATIVAS_VALIDACAO} ainda pendente "
+                        f"(status={validacao.get('stateName') or validacao.get('stateCode')}, "
+                        f"status_ok={validacao.get('statusOk')}, "
+                        f"logística_ok={validacao.get('dadosLogisticaOk')})."
+                    )
+                else:
+                    self.print_aviso(
+                        f"Linha {linha} ({material}): falha ao consultar validação "
+                        f"{consulta}/{CH_TENTATIVAS_VALIDACAO}: "
+                        f"{validacao.get('error', 'erro não informado')}"
+                    )
+
+        status = ultimo_resultado.get("stateName") or ultimo_resultado.get("stateCode") or "não confirmado"
+        return {
+            "ok": False,
+            "error": (
+                f"Não validado após {CH_TENTATIVAS_ATUALIZACAO} tentativa(s). "
+                f"Status final: {status}."
+            ),
+            "detalhe": ultimo_resultado,
+        }
 
     def ch_atualizar_mapeamento_api(self, driver: webdriver.Chrome, material: str, acao_str: str) -> dict:
         email_usuario = self.ch_email_var.get()
@@ -997,9 +1191,6 @@ class SAPAutomationGUI:
         except Exception as e:
             return {"ok": False, "error": str(e)}
         
-    # -------------------------------------------------------------------------
-    # FLUXO PRINCIPAL - CARGO HEROES
-    # -------------------------------------------------------------------------
     def start_ch_automation(self) -> None:
         if self.running: return
         email = self.ch_email_var.get()
@@ -1203,12 +1394,15 @@ class SAPAutomationGUI:
                 "texto": tl, "dateBoarding": ds_iso, "dateLanding": dc_iso
             }
 
-            resultado = self.ch_atualizar_normal_api(driver, mat, dados_api)
+            resultado = self.ch_atualizar_normal_com_validacao(driver, mat, dados_api, i)
             
             celula_a1 = gspread.utils.rowcol_to_a1(i, col)
             if resultado.get("ok"):
                 updates_planilha.append({'range': celula_a1, 'values': [["OK"]]})
-                self.print_sucesso(f"Linha {i} ({mat}) Atualizada Instantaneamente!")
+                self.print_sucesso(
+                    f"Linha {i} ({mat}) atualizada e validada "
+                    f"(tentativa {resultado.get('tentativa', 1)})."
+                )
             else:
                 self.print_erro(f"Erro na linha {i} ({mat}): {resultado.get('error')}")
                 updates_planilha.append({'range': celula_a1, 'values': [["ERRO"]]})
