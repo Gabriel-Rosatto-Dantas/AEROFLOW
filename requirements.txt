@@ -8,3 +8,4 @@ pillow==12.1.0
 pywin32==311
 selenium==4.40.0
 tenacity==8.2.3
+keyring==25.7.0
